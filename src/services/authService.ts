@@ -1,5 +1,5 @@
 import type { AuthUser } from '../types';
-import { getErrorMessage, publicApi, setRefreshHandler, unwrap, type ApiResponse } from './apiClient';
+import { api, getErrorMessage, publicApi, setRefreshHandler, unwrap, type ApiResponse } from './apiClient';
 import { sessionStore, type Session, type Tokens } from './session';
 
 interface TokenResponse {
@@ -8,6 +8,7 @@ interface TokenResponse {
   token_type: string;
   expires_in: number; // seconds
   refresh_expires_in?: number; // seconds
+  is_temporary_password?: boolean;
 }
 
 interface ProfileResponse {
@@ -37,6 +38,7 @@ function toAuthUser(p: ProfileResponse): AuthUser {
     name: `${p.first_name} ${p.last_name}`.trim() || p.email,
     email: p.email,
     roleId: p.role_id == null ? '' : String(p.role_id),
+    mustChangePassword: !!p.is_temporary_password,
   };
 }
 
@@ -48,12 +50,16 @@ export const authService = {
         '/auth/login',
         new URLSearchParams({ username, password }), // sent as application/x-www-form-urlencoded
       );
-      const tokens = toTokens(unwrap(data, 'Sign in failed.'));
+      const token = unwrap(data, 'Sign in failed.');
+      const tokens = toTokens(token);
       // The session isn't stored yet, so pass the new token explicitly.
       const profile = await publicApi.get<ApiResponse<ProfileResponse>>('/employees/profile', {
         headers: { Authorization: `Bearer ${tokens.accessToken}` },
       });
-      return { ...tokens, user: toAuthUser(unwrap(profile.data, 'Could not load your profile.')) };
+      const user = toAuthUser(unwrap(profile.data, 'Could not load your profile.'));
+      // Either the login response or the profile can report a temporary password.
+      user.mustChangePassword = user.mustChangePassword || !!token.is_temporary_password;
+      return { ...tokens, user };
     } catch (err) {
       throw new Error(getErrorMessage(err, 'Email or password is incorrect.'));
     }
@@ -62,6 +68,19 @@ export const authService = {
   async refresh(refreshToken: string, previous?: Tokens): Promise<Tokens> {
     const { data } = await publicApi.post<ApiResponse<TokenResponse>>('/auth/refresh', { refresh_token: refreshToken });
     return toTokens(unwrap(data, 'Session expired.'), previous);
+  },
+
+  /** Replaces the signed-in user's own password. The backend clears is_temporary_password. */
+  async changePassword(newPassword: string, confirmPassword: string): Promise<void> {
+    try {
+      const { data } = await api.patch<ApiResponse<unknown>>('/employees/change-password', {
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      });
+      unwrap(data, 'Could not change your password.');
+    } catch (err) {
+      throw new Error(getErrorMessage(err, 'Could not change your password.'));
+    }
   },
 };
 

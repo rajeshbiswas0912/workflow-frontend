@@ -45,6 +45,8 @@ export interface AuthUser {
   name: string;
   email: string;
   roleId: string;
+  /** Signed in with a temporary password: must set a new one before using the app. */
+  mustChangePassword: boolean;
 }
 
 export type LoadStatus = 'idle' | 'loading' | 'succeeded' | 'failed';

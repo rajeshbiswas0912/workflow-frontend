@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector, useCan } from '../app/hooks';
 import { logout } from '../features/auth/authSlice';
 import type { Action, Area } from '../types';
 import { PageHeader } from './ui';
+import ChangePasswordModal from './ChangePasswordModal';
 
 /** Redirects to /login when there is no session or it has expired (the access token itself renews silently). */
 export function RequireAuth({ children }: { children: ReactNode }) {
@@ -15,6 +16,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     if (user && expired) dispatch(logout());
   }, [user, expired, dispatch]);
   if (!user || expired) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  // Temporary password: block every page (including URLs typed in the address bar) until it is changed.
+  // The app itself is not rendered, so no page data is loaded behind the popup.
+  if (user.mustChangePassword) return <ChangePasswordModal />;
   return <>{children}</>;
 }
 

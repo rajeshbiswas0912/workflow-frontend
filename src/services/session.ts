@@ -74,6 +74,14 @@ export const sessionStore = {
     emit();
   },
 
+  /** Updates details of the signed-in user, e.g. after a password change. */
+  updateUser(patch: Partial<AuthUser>): void {
+    if (!current) return;
+    current = { ...current, user: { ...current.user, ...patch } };
+    write(current);
+    emit();
+  },
+
   clear(): void {
     if (!current) return;
     current = null;

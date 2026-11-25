@@ -28,6 +28,20 @@ export const login = createAsyncThunk<
   }
 });
 
+/** Sets a new password; on success the temporary-password lock is lifted (via the session store). */
+export const changePassword = createAsyncThunk<
+  void,
+  { newPassword: string; confirmPassword: string },
+  { rejectValue: string }
+>('auth/changePassword', async ({ newPassword, confirmPassword }, { rejectWithValue }) => {
+  try {
+    await authService.changePassword(newPassword, confirmPassword);
+    sessionStore.updateUser({ mustChangePassword: false });
+  } catch (err) {
+    return rejectWithValue((err as Error).message);
+  }
+});
+
 const initialState: AuthState = { ...fromSession(sessionStore.get()), status: 'idle', error: null };
 
 const authSlice = createSlice({

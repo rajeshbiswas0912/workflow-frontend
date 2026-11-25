@@ -1,4 +1,4 @@
-import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, type AxiosAdapter, type InternalAxiosRequestConfig } from 'axios';
 import { sessionStore, type Tokens } from './session';
 
 declare module 'axios' {
@@ -13,8 +13,66 @@ const baseURL = import.meta.env.VITE_API_BASE_URL;
 /** For endpoints that don't need a token (login, refresh). Has no interceptors, so it can't loop. */
 export const publicApi = axios.create({ baseURL, timeout: 15_000 });
 
+/**
+ * The API rejects (503) more than a few simultaneous requests, and pages like the dashboard load many
+ * widgets at once. So at most MAX_CONCURRENT requests are on the wire; the rest wait their turn.
+ * Kept below the server's limit to leave room for the token refresh (publicApi) and other tabs.
+ */
+const MAX_CONCURRENT = Number(import.meta.env.VITE_API_MAX_CONCURRENT) || 4;
+/** A GET answered with one of these is retried after a short wait, as the server is only busy. */
+const RETRY_STATUSES = new Set([429, 503]);
+const RETRY_DELAYS_MS = [400, 1200];
+
+let active = 0;
+const waiting: (() => void)[] = [];
+
+function acquireSlot(): Promise<void> {
+  if (active < MAX_CONCURRENT) {
+    active++;
+    return Promise.resolve();
+  }
+  // The slot is handed over directly by releaseSlot, so `active` stays the same.
+  return new Promise((resolve) => waiting.push(resolve));
+}
+
+function releaseSlot(): void {
+  const next = waiting.shift();
+  if (next) next();
+  else active--;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Wraps axios's own adapter (the part that does the actual HTTP call) with the queue and retry.
+ * Interceptors run outside it, so a request waiting on a token refresh doesn't hold a slot.
+ */
+function limitedAdapter(inner: AxiosAdapter): AxiosAdapter {
+  return async (config) => {
+    const canRetry = (config.method ?? 'get').toLowerCase() === 'get';
+    for (let attempt = 0; ; attempt++) {
+      await acquireSlot();
+      try {
+        return await inner(config);
+      } catch (err) {
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        if (!canRetry || status === undefined || !RETRY_STATUSES.has(status) || attempt >= RETRY_DELAYS_MS.length) {
+          throw err;
+        }
+      } finally {
+        releaseSlot();
+      }
+      await sleep(RETRY_DELAYS_MS[attempt]);
+    }
+  };
+}
+
 /** For every authenticated endpoint. Adds the bearer token and refreshes it silently when needed. */
-export const api = axios.create({ baseURL, timeout: 15_000 });
+export const api = axios.create({
+  baseURL,
+  timeout: 15_000,
+  adapter: limitedAdapter(axios.getAdapter(axios.defaults.adapter)),
+});
 
 /** Renew the access token this long before it expires, so requests never go out with a stale one. */
 const REFRESH_LEEWAY_MS = 30_000;
